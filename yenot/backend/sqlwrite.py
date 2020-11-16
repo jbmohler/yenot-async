@@ -1,6 +1,6 @@
 import re
 import contextlib
-from . import sqlread
+# from . import sqlread
 
 
 PRIM_KEY_SELECT = """

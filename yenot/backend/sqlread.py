@@ -1,6 +1,6 @@
 import re
-import psycopg2.extensions as psyext
-import psycopg2.extras as extras
+#import psycopg2.extensions as psyext
+#import psycopg2.extras as extras
 
 
 def sql_rows(conn, select, params=None):

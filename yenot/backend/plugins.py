@@ -8,8 +8,12 @@ import traceback
 import time
 import threading
 import queue
+
+import aiohttp.web as web
 import asyncpg
+
 from . import misc
+
 
 
 class CancelQueue(queue.SimpleQueue):
@@ -36,7 +40,7 @@ class CancelQueue(queue.SimpleQueue):
             raise RuntimeError("CancelQueue elements must be 2-tuples")
 
 
-def create_connection(dburl):
+async def create_connection(dburl):
     result = urllib.parse.urlsplit(dburl)
 
     kwargs = {"database": result.path[1:]}
@@ -52,7 +56,7 @@ def create_connection(dburl):
     return await asyncpg.connect(**kwargs)
 
 
-def create_pool(dburl):
+async def create_pool(dburl):
     result = urllib.parse.urlsplit(dburl)
 
     kwargs = {"database": result.path[1:]}
@@ -79,19 +83,22 @@ async def yenot_handler(request, handler):
 
 
 class YenotApplication:
-    def __init__(self):
+    def __init__(self, dburl):
         self.routes = web.RouteTableDef()
 
         self.app = web.Application()
         self.app.add_routes(self.routes)
 
-        self.pool = create_pool(dburl)
+        # create_pool(dburl)
+        self.pool = None
+        self.dburl = dburl
         self.dbconn_register = {}
 
         self.sitevars = {}
 
     def _decorator(self, f, method, route, name, **kwargs):
-        pass
+        route = self.app.router.add_route(method, route, f)
+        print(dir(route))
 
     def get(self, route, name, **kwargs):
         def closure(f):
@@ -136,23 +143,32 @@ class YenotApplication:
             if ctoken != None:
                 self.unregister_connection(ctoken, conn)
 
-    # to become a method of app
-    @contextlib.contextmanager
-    def dbconn(self):
-        conn = await self.pool.acquire()
-        ctoken = getattr(request, "cancel_token", None)
+    @contextlib.asynccontextmanager
+    async def dbconn(self):
+        if not self._pool:
+            self._pool = await create_pool(self.dburl)
+        conn = await self._pool.acquire()
         try:
-            if ctoken != None:
-                self.register_connection(ctoken, conn)
             yield conn
         finally:
-            if ctoken != None:
-                self.unregister_connection(ctoken, conn)
-            await self.pool.release(conn)
+            await self._pool.release(conn)
+
+    # @contextlib.contextmanager
+    # def dbconn(self):
+    #     conn = await self.pool.acquire()
+    #     ctoken = getattr(request, "cancel_token", None)
+    #     try:
+    #         if ctoken != None:
+    #             self.register_connection(ctoken, conn)
+    #         yield conn
+    #     finally:
+    #         if ctoken != None:
+    #             self.unregister_connection(ctoken, conn)
+    #         await self.pool.release(conn)
 
     # to become a method of app
     @contextlib.contextmanager
-    def background_dbconn(self):
+    async def background_dbconn(self):
         conn = await self.pool.acquire()
         try:
             yield conn
@@ -199,6 +215,8 @@ class YenotApplication:
             key, value = c.split("=")
             self.sitevars[key] = value
 
+    def run(self):
+        web.run_app(self.app)
 
 global_app = None
 
@@ -206,7 +224,9 @@ global_app = None
 def init_application(dburl):
     global global_app
 
-    app = YenotApplication()
+    app = YenotApplication(dburl)
+
+    global_app = app
 
     # app.install(RequestCancelTracker())
     # app.install(ExceptionTrapper())
@@ -220,7 +240,6 @@ def init_application(dburl):
         port = int(os.environ["YENOT_PORT"])
     if "YENOT_HOST" in os.environ:
         host = os.environ["YENOT_HOST"]
-    app._paste_server = PasteServer(host=host, port=port)
 
     return app
 
