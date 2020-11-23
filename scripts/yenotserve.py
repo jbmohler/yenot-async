@@ -20,6 +20,9 @@ if __name__ == "__main__":
         "--sitevar", action="append", default=[], help="add site variable"
     )
 
+    import logging
+    logging.basicConfig(level=logging.DEBUG)
+
     args = parse.parse_args()
 
     app = yenot.backend.init_application(args.dburl)
@@ -40,9 +43,6 @@ if __name__ == "__main__":
         kwargs = {"debug": True, "reloader": False}
     else:
         kwargs = {}
-
-    import logging
-    logging.basicConfig(level=logging.DEBUG)
 
     # debugging & development service
     app.run(**kwargs)

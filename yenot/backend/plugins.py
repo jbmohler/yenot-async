@@ -2,6 +2,9 @@ import os
 import sys
 import re
 import json
+import signal
+import asyncio
+import logging
 import contextlib
 import urllib.parse
 import traceback
@@ -13,6 +16,9 @@ import aiohttp.web as web
 import asyncpg
 
 from . import misc
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 
@@ -71,11 +77,13 @@ async def create_pool(dburl):
 
     return await asyncpg.create_pool(min_size=3, max_size=6, **kwargs)
 
+
 # to convert
 # - add async on def
 # - add await on sql_tab2
 # - add param of request
 # - return YenotResult
+
 
 async def yenot_handler(request, handler):
     response = await handler(*args)
@@ -84,21 +92,22 @@ async def yenot_handler(request, handler):
 
 class YenotApplication:
     def __init__(self, dburl):
-        self.routes = web.RouteTableDef()
+        #self.routes = web.RouteTableDef()
 
         self.app = web.Application()
-        self.app.add_routes(self.routes)
+        #self.app.add_routes(self.routes)
 
         # create_pool(dburl)
-        self.pool = None
+        self._pool = None
         self.dburl = dburl
         self.dbconn_register = {}
 
         self.sitevars = {}
 
     def _decorator(self, f, method, route, name, **kwargs):
-        route = self.app.router.add_route(method, route, f)
-        print(dir(route))
+        logger.info(f"adding {method} {route} -- {f}")
+        route = self.app.router.add_route(method, route, f, name=name)
+        logger.debug(dir(route))
 
     def get(self, route, name, **kwargs):
         def closure(f):
@@ -215,8 +224,32 @@ class YenotApplication:
             key, value = c.split("=")
             self.sitevars[key] = value
 
+    async def _start(self):
+        logger.info(f"server startup on http://{self.run_args['host']}:{self.run_args['port']}")
+
+        self.runner = web.AppRunner(self.app)
+        await self.runner.setup()
+        site = web.TCPSite(self.runner, self.run_args["host"], self.run_args["port"])
+        await site.start()
+
+    async def _stop(self, sig):
+        await self.runner.cleanup()
+
+        asyncio.get_event_loop().stop()
+
     def run(self):
-        web.run_app(self.app)
+        # web.run_app(self.app)
+
+        loop = asyncio.get_event_loop()
+
+        # May want to catch other signals too
+        signals = (signal.SIGTERM, signal.SIGINT)
+        for s in signals:
+            loop.add_signal_handler(s, lambda s=s: asyncio.create_task(self._stop(s)))
+
+        loop.create_task(self._start())
+        loop.run_forever()
+
 
 global_app = None
 
@@ -234,12 +267,10 @@ def init_application(dburl):
     # hook up the basic stuff
     import yenot.server  # noqa: F401
 
-    port = 8080
-    host = "127.0.0.1"
-    if "YENOT_PORT" in os.environ:
-        port = int(os.environ["YENOT_PORT"])
-    if "YENOT_HOST" in os.environ:
-        host = os.environ["YENOT_HOST"]
+    app.run_args = {
+        "host": os.getenv("YENOT_HOST", "0.0.0.0"),
+        "port": int(os.getenv("YENOT_PORT", 8080)),
+    }
 
     return app
 
